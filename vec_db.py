@@ -105,17 +105,17 @@ class VecDB:
         except Exception as e:
             raise RuntimeError(f"An error occurred: {e}")
 
-    def get_all_rows(self) -> np.ndarray:
-        # Get all the records from the database.
-        #
-        # Returns:
-        #     np.ndarray: A numpy array of shape (num_records, DIMENSION) containing all the records in the database.
-        #
-        # Note:
-        #     This function loads all the data in memory, so be careful when using it with large databases.
-        num_records = self._get_num_records()
-        vectors = np.memmap(self.db_path, dtype=np.float32, mode='r', shape=(num_records, DIMENSION))
-        return np.array(vectors)
+    # def get_all_rows(self) -> np.ndarray:
+    #     # Get all the records from the database.
+    #     #
+    #     # Returns:
+    #     #     np.ndarray: A numpy array of shape (num_records, DIMENSION) containing all the records in the database.
+    #     #
+    #     # Note:
+    #     #     This function loads all the data in memory, so be careful when using it with large databases.
+    #     num_records = self._get_num_records()
+    #     vectors = np.memmap(self.db_path, dtype=np.float32, mode='r', shape=(num_records, DIMENSION))
+    #     return np.array(vectors)
     
     def _cal_score(self, vec1, vec2):
         # Calculate the cosine similarity between two vectors.
