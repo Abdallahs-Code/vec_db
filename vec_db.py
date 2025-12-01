@@ -7,97 +7,38 @@ import json
 import time
 from pathlib import Path
 
-DB_SEED_NUMBER = 42
 ELEMENT_SIZE = np.dtype(np.float32).itemsize
-DIMENSION = 70
+DIMENSION = 64
+DB_SEED_NUMBER = 42
 
 class VecDB:
-
     def __init__(self, database_file_path = "saved_db.dat", index_file_path = "index.dat", new_db = True, db_size = None) -> None:
-        # Initialize a VecDB object.
-        #
-        # Args:
-        #     database_file_path (str): The path to the file where the database will be stored.
-        #     index_file_path (str): The path to the file where the index will be stored.
-        #     new_db (bool): Whether a new database should be created.
-        #     db_size (int): The number of records in the database if new_db is True.
-        #
-        # Raises:
-        #     ValueError: If new_db is True and db_size is None.
-        #
-        # Returns:
-        #     None
+        # Initialize database paths
         self.db_path = database_file_path
         self.index_path = index_file_path
         if new_db:
             if db_size is None:
                 raise ValueError("You need to provide the size of the database")
-            # delete the old DB file if exists
-            if os.path.exists(self.db_path):
-                os.remove(self.db_path)
-            self.generate_database(db_size)
-
-    def generate_database(self, size: int) -> None:
-        # Generate a random database of a given size.
-        #
-        # Args:
-        #     size (int): The number of records in the database.
-        #
-        # Returns:
-        #     None
-        rng = np.random.default_rng(DB_SEED_NUMBER)
-        vectors = rng.random((size, DIMENSION), dtype=np.float32)
-        self._write_vectors_to_file(vectors)
-        self._build_index()
-
-    def _write_vectors_to_file(self, vectors: np.ndarray) -> None:
-        # Write a numpy array of vectors to a file.
-        #
-        # Args:
-        #     vectors (np.ndarray): The numpy array of vectors to write to the file.
-        #
-        # Returns:
-        #     None
-        mmap_vectors = np.memmap(self.db_path, dtype=np.float32, mode='w+', shape=vectors.shape)
-        mmap_vectors[:] = vectors[:]
-        mmap_vectors.flush()
+            # Build index for database
+            self._build_index()
 
     def _get_num_records(self) -> int:
-        # Get the number of records in the database.
-        #
-        # Returns:
-        #     int: The number of records in the database.
+        # Get number of records in the database
         return os.path.getsize(self.db_path) // (DIMENSION * ELEMENT_SIZE)
 
-    def insert_records(self, rows: Annotated[np.ndarray, (int, 70)]):
-        # Insert new records into the database.
-        #
-        # Args:
-        #     rows (Annotated[np.ndarray, (int, 70)]): The numpy array of vectors to insert into the database.
-        #
-        # Returns:
-        #     None
+    def insert_records(self, rows: Annotated[np.ndarray, (int, DIMENSION)]) -> None:
+        # Insert new records into the database
         num_old_records = self._get_num_records()
         num_new_records = len(rows)
         full_shape = (num_old_records + num_new_records, DIMENSION)
         mmap_vectors = np.memmap(self.db_path, dtype=np.float32, mode='r+', shape=full_shape)
         mmap_vectors[num_old_records:] = rows
         mmap_vectors.flush()
-        #TODO: might change to call insert in the index, if you need
+        # Rebuild index after insertion
         self._build_index()
 
     def get_one_row(self, row_num: int) -> np.ndarray:
-        # This function is only load one row in memory
-        # NOTE: Bellow is the old code, it is not efficient.
-        # I enhanced the code beneath these couple of commented lines
-        # in order to make it more efficient as it is critical for the project
-        # now it checks for the index before starting the actual loading of the vector
-        # try:
-        #     offset = row_num * DIMENSION * ELEMENT_SIZE
-        #     mmap_vector = np.memmap(self.db_path, dtype=np.float32, mode='r', shape=(1, DIMENSION), offset=offset)
-        #     return np.array(mmap_vector[0])
-        # except Exception as e:
-        #     return f"An error occurred: {e}"
+        # Get a single row from the database
         num_records = self._get_num_records()
         if row_num < 0 or row_num >= num_records:
             raise ValueError(f"Invalid row number: {row_num}. Must be between 0 and {num_records - 1}.")
@@ -109,29 +50,13 @@ class VecDB:
             raise RuntimeError(f"An error occurred: {e}")
 
     def get_all_rows(self) -> np.ndarray:
-        # Get all the records from the database.
-        #
-        # Returns:
-        #     np.ndarray: A numpy array of shape (num_records, DIMENSION) containing all the records in the database.
-        #
-        # Note:
-        #     This function loads all the data in memory, so be careful when using it with large databases.
+        # Get all rows from the database
         num_records = self._get_num_records()
         vectors = np.memmap(self.db_path, dtype=np.float32, mode='r', shape=(num_records, DIMENSION))
         return np.array(vectors)
 
     def _cal_score(self, vec1, vec2):
-        # Calculate the cosine similarity between two vectors.
-        #
-        # Args:
-        #     vec1 (np.ndarray): The first vector.
-        #     vec2 (np.ndarray): The second vector.
-        #
-        # Returns:
-        #     float: The cosine similarity between the two vectors.
-        #
-        # Note:
-        #     The cosine similarity is calculated as the dot product of the two vectors divided by the product of their norms.
+        # Calculate cosine similarity score between two vectors
         dot_product = np.dot(vec1, vec2)
         norm_vec1 = np.linalg.norm(vec1)
         norm_vec2 = np.linalg.norm(vec2)
@@ -139,31 +64,18 @@ class VecDB:
         return cosine_similarity
 
     def compute_clustering_parameters(self):
-        # Compute parameters for clustering dynamically based on database size.
-        # Sets self.sample_size, self.n_clusters, self.batch_size, self.max_iter.
         db_size = self._get_num_records()
         # Sample size: 5% of db, good enough for all db sizes since the lowest db size is 1M
         self.sample_size = int(0.05 * db_size)
         # Number of clusters: nearest power of 2 of sqrt(db_size) -> rule of thumb
-        sqrt_db = math.sqrt(db_size)
-        self.n_clusters = 2 ** int(round(math.log2(sqrt_db)))
+        self.n_clusters = 2 ** int(round(math.log2(math.sqrt(db_size))))
         # MiniBatch batch size is 4096 which is good for db sizes 1M - 20M
         self.batch_size = 4096
         # Max iterations appropriate regardless of db size
         self.max_iter = 200
 
     def sample_for_kmeans(self, seed : int = DB_SEED_NUMBER) -> np.ndarray:
-        # Return a numpy array of vectors randomly sampled from the database.
-        #
-        # Args:
-        #     sample_size (int): The number of records to sample from the database.
-        #     seed (int): The seed for the random number generator. Defaults to DB_SEED_NUMBER.
-        #
-        # Returns:
-        #     np.ndarray: A numpy array of shape (sample_size, DIMENSION) containing the sampled vectors.
-        #
-        # Raises:
-        #     ValueError: If the sample size is greater than the number of records in the database.
+        # Sample vectors from the database for k-means training
         sample_size = self.sample_size
         num_records = self._get_num_records()
         if sample_size > num_records:
@@ -176,7 +88,7 @@ class VecDB:
         return samples
 
     def train_centroids(self, sampled_vectors: np.ndarray) -> np.ndarray:
-        # Train MiniBatchKMeans on sampled vectors and return centroids.
+        # Train k-means centroids using MiniBatchKMeans
         kmeans = MiniBatchKMeans(
             n_clusters=self.n_clusters,
             batch_size=self.batch_size,
@@ -185,72 +97,41 @@ class VecDB:
         )
         kmeans.fit(sampled_vectors)
         return kmeans.cluster_centers_.astype(np.float32)
-
+    
     def save_centroids(self, centroids: np.ndarray):
-        # Save centroids to disk as a raw binary file (no header, same format as main DB).
-        #
-        # Args:
-        #     centroids (np.ndarray): Array of shape (n_clusters, 64), dtype=float32
-        mmap_centroids = np.memmap(self.index_path, dtype=np.float32, mode='w+', shape=centroids.shape)
-        mmap_centroids[:] = centroids[:]
-        mmap_centroids.flush()
-
-    def load_centroids(self, n_clusters: int) -> np.ndarray:
-        """
-        Load centroids from disk with validation.
-
-        Args:
-            n_clusters (int): Number of clusters (needed to reshape the raw file)
-
-        Returns:
-            np.ndarray: Centroids of shape (n_clusters, 64), dtype=float32
-
-        Raises:
-            FileNotFoundError: If centroids file doesn't exist
-            ValueError: If file size doesn't match expected dimensions
-        """
-        if not os.path.exists(self.index_path):
-            raise FileNotFoundError(f"Centroids file not found: {self.index_path}")
-
-        expected_size = n_clusters * DIMENSION * ELEMENT_SIZE
-        actual_size = os.path.getsize(self.index_path)
-
-        if actual_size != expected_size:
-            raise ValueError(
-                f"Centroids file size mismatch. Expected {expected_size} bytes "
-                f"for {n_clusters} clusters, but got {actual_size} bytes. "
-                f"File may be corrupted or n_clusters is incorrect."
-            )
-
-        # Use fromfile for reading - more reliable than memmap for small files
-        with open(self.index_path, 'rb') as f:
-            centroids = np.fromfile(f, dtype=np.float32, count=n_clusters * DIMENSION)
-
-        return centroids.reshape(n_clusters, DIMENSION)
-
-    def save_centroids(self, centroids: np.ndarray):
-        """
-        Save centroids to disk with proper file handling.
-
-        Args:
-            centroids (np.ndarray): Array of shape (n_clusters, 64), dtype=float32
-        """
-        # Validate input
+        # Ensure centroids are float32
         if centroids.dtype != np.float32:
             centroids = centroids.astype(np.float32)
-
-        # Use standard file I/O instead of memmap for writing
-        # This ensures immediate flush and proper file closure
+        # Save centroids to disk
         with open(self.index_path, 'wb') as f:
             centroids.tofile(f)
-
-        # Verify the file was written correctly
+        # Validate with file size
         expected_size = centroids.shape[0] * centroids.shape[1] * ELEMENT_SIZE
         actual_size = os.path.getsize(self.index_path)
         if actual_size != expected_size:
             raise RuntimeError(
                 f"Centroid file size mismatch. Expected {expected_size} bytes, got {actual_size} bytes"
             )
+
+    def load_centroids(self, n_clusters: int) -> np.ndarray:
+        # If centroids file does not exist, raise error
+        if not os.path.exists(self.index_path):
+            raise FileNotFoundError(f"Centroids file not found: {self.index_path}")
+        # Validate with file size
+        expected_size = n_clusters * DIMENSION * ELEMENT_SIZE
+        actual_size = os.path.getsize(self.index_path)
+        if actual_size != expected_size:
+            raise ValueError(
+                f"Centroids file size mismatch. Expected {expected_size} bytes "
+                f"for {n_clusters} clusters, but got {actual_size} bytes. "
+                f"File may be corrupted or n_clusters is incorrect."
+            )
+        # Load centroids from disk
+        with open(self.index_path, 'rb') as f:
+            centroids = np.fromfile(f, dtype=np.float32, count=n_clusters * DIMENSION)
+        # Reshape to (n_clusters, DIMENSION)
+        return centroids.reshape(n_clusters, DIMENSION)
+
     def _build_index(self):
         """
         Build IVF index with robust error handling and efficient memory usage.
