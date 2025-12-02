@@ -384,6 +384,3 @@ class VecDB:
         # Select top_k IDs
         topk_ids = candidate_ids[topk_idx].tolist()
         return [int(x) for x in topk_ids]
-    
-if __name__ == "__main__":
-    db = VecDB(database_file_path="OpenSubtitles_en_20M_emb_64.dat", index_file_path="db_20M", new_db=False)
