@@ -338,6 +338,7 @@ class VecDB:
         centroids = self.load_centroids(n_clusters)
         # Compute similarities to centroids and select top-nprobe
         sims_to_centroids = centroids.dot(qn)
+        del centroids  # Free centroids immediately after use
         # Choose nprobe heuristically depending on db size (tweakable)
         if num_records <= 1_000_000:
             nprobe = 3
@@ -348,39 +349,69 @@ class VecDB:
         nprobe = min(max(1, nprobe), n_clusters)
         # Get top-nprobe centroid indices
         top_centroid_idxs = np.argpartition(-sims_to_centroids, nprobe-1)[:nprobe]
+        del sims_to_centroids  # Free after getting top indices
         # Gather candidate ids from inverted lists (disk memmap)
         candidate_ids_list = []
         for ci in top_centroid_idxs:
             ids = self.load_inverted_list(int(ci))  # Returns memmap of uint32 (or empty memmap)
             if ids.size == 0:
                 continue
-            candidate_ids_list.append(ids)
+            # Convert to array and append (memmap can be freed)
+            candidate_ids_list.append(np.array(ids, dtype=np.uint32))
+        del top_centroid_idxs  # Free after loading candidate lists
         if not candidate_ids_list:
             return []
-        # Concat and deduplicate candidate ids (dedupe helps if vectors assigned to multiple probed clusters)
+        # Concat candidate ids
         candidate_ids = np.concatenate(candidate_ids_list, axis=0)
-        # Read only required vectors from DB using memmap advanced indexing
-        # Note: this will allocate candidate_vectors in RAM (size = n_candidates * DIMENSION * 4 bytes)
+        del candidate_ids_list  # Free list immediately after concat
+        n_candidates = candidate_ids.size
+        # Determine batch size for processing candidates
+        # Target: ~8MB per batch of vectors
+        target_batch_bytes = 8 * 1024 * 1024
+        batch_size = max(1, target_batch_bytes // (DIMENSION * ELEMENT_SIZE))
+        batch_size = min(batch_size, n_candidates)
+        # Open memmap for database
         data = np.memmap(self.db_path, dtype=np.float32, mode='r', shape=(num_records, DIMENSION))
+        # Process candidates in batches
+        all_scores = np.empty(n_candidates, dtype=np.float32)
         try:
-            candidate_vectors = np.array(data[candidate_ids], dtype=np.float32)  # Loads only needed rows
+            for batch_start in range(0, n_candidates, batch_size):
+                batch_end = min(batch_start + batch_size, n_candidates)
+                batch_ids = candidate_ids[batch_start:batch_end]
+                # Load batch vectors
+                batch_vectors = np.array(data[batch_ids], dtype=np.float32)
+                # Normalize batch vectors
+                batch_norms = np.linalg.norm(batch_vectors, axis=1, keepdims=True)
+                batch_norms[batch_norms == 0] = 1.0
+                batch_vectors /= batch_norms
+                del batch_norms  # Free norms
+                # Compute scores for this batch
+                batch_scores = batch_vectors.dot(qn)
+                all_scores[batch_start:batch_end] = batch_scores
+                # Free batch data immediately
+                del batch_vectors
+                del batch_scores
+                del batch_ids
         except Exception as e:
             raise RuntimeError(f"Failed reading candidate vectors: {e}")
-        # Normalize candidate vectors
-        norms = np.linalg.norm(candidate_vectors, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        candidate_vectors = candidate_vectors / norms
-        # Compute cosine similarity scores with query (dot of normalized vectors)
-        scores = candidate_vectors.dot(qn)  # Shape (n_candidates,)
+        finally:
+            del data  # Ensure memmap is closed
         # If top_k is much smaller than number of candidates, use partial sort
-        if top_k < candidate_ids.size:
+        if top_k < n_candidates:
             # Get top_k candidate indices (unordered)
-            topk_idx = np.argpartition(-scores, top_k - 1)[:top_k]
+            topk_idx = np.argpartition(-all_scores, top_k - 1)[:top_k]
             # Sort only the top_k for deterministic results (by -score, then candidate ID)
-            topk_idx = topk_idx[np.lexsort((candidate_ids[topk_idx], -scores[topk_idx]))]
+            topk_idx = topk_idx[np.lexsort((candidate_ids[topk_idx], -all_scores[topk_idx]))]
         else:
             # If top_k >= n_candidates, just sort everything
-            topk_idx = np.lexsort((candidate_ids, -scores))
+            topk_idx = np.lexsort((candidate_ids, -all_scores))
+            topk_idx = topk_idx[:top_k]  # Take only top_k
+        del all_scores  # Free scores after getting indices
         # Select top_k IDs
-        topk_ids = candidate_ids[topk_idx].tolist()
-        return [int(x) for x in topk_ids]
+        topk_ids = candidate_ids[topk_idx]
+        del candidate_ids  # Free candidate_ids
+        del topk_idx  # Free indices
+        # Convert to list and return
+        result = [int(x) for x in topk_ids]
+        del topk_ids  # Free before return
+        return result
