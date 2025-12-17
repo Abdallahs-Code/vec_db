@@ -2,7 +2,7 @@
 
 ## Overview
 
-VecDB is a lightweight, disk-backed vector database and indexing system implemented in pure Python. It is designed for large-scale semantic search over high-dimensional embeddings (millions of vectors) under strict memory constraints. The system builds an **approximate nearest neighbor (ANN)** index using **Inverted File (IVF) clustering** combined with **Product Quantization (PQ)** and supports efficient top-k retrieval using cosine similarity.
+VecDB is a lightweight, disk-backed vector database and indexing system implemented in Python. It is designed for large-scale semantic search over high-dimensional embeddings (millions of vectors) under strict memory constraints. The system builds an **approximate nearest neighbor (ANN)** index using **Inverted File (IVF) clustering** combined with **Product Quantization (PQ)** and supports efficient top-k retrieval using cosine similarity.
 
 ## Key Features
 
