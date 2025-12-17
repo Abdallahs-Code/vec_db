@@ -469,17 +469,12 @@ class VecDB:
         centroids = self.load_centroids(n_clusters)
         codebook = self.load_pq_codebook()
         m, ksub, d_sub = codebook.shape
-        # Set candidates size based on DB size
-        if num_records <= 1_000_000:
-            candidates = 100
-        elif num_records <= 10_000_000:
-            candidates = 500
-        else:
-            candidates = 1000
-        if candidates < top_k:
-            candidates = top_k
         # Set nprobe
-        nprobe = min(66, n_clusters)
+        nprobe = max(1, min(n_clusters, round(math.log2(n_clusters))))
+        # Calculate number of candidates to collect
+        avg_list_size = num_records / n_clusters
+        expected_examined = avg_list_size * nprobe
+        candidates = max(top_k, round(0.01 * expected_examined))
         # Select top nprobe clusters using cosine similarity
         sims_to_centroids = centroids @ q_normalized
         nearest_centroids = np.argsort(sims_to_centroids)[::-1][:nprobe]
